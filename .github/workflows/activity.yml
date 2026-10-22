@@ -1,0 +1,63 @@
+name: Activity bookshelf
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 15 * * *"
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/activity.yml
+      - tools/**
+      - assets/profile-template.svg
+
+permissions: {}
+
+concurrency:
+  group: activity-bookshelf
+  cancel-in-progress: false
+
+jobs:
+  draw:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Check activity artwork
+        run: python3 -m unittest discover -s tools -p 'test_*.py'
+
+      - name: Read anonymous daily contribution counts
+        env:
+          GH_TOKEN: ${{ secrets.PROFILE_READ_TOKEN }}
+          PROFILE_LOGIN: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$GH_TOKEN" ]]; then
+            echo "::error::Configure PROFILE_READ_TOKEN with read:user scope."
+            exit 1
+          fi
+          calendar_range="$(python3 tools/calendar_range.py)"
+          read -r calendar_from calendar_to <<< "$calendar_range"
+          gh api graphql -F query=@tools/calendar.graphql -f login="$PROFILE_LOGIN" \
+            -f from="$calendar_from" -f to="$calendar_to" > "$RUNNER_TEMP/calendar.json"
+
+      - name: Draw the activity bookshelf
+        run: python3 tools/generate.py "$RUNNER_TEMP/calendar.json" dist/profile.svg
+
+      - name: Publish the animated profile
+        uses: crazy-max/ghaction-github-pages@v5.0.0
+        with:
+          target_branch: output
+          build_dir: dist
+          jekyll: false
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
